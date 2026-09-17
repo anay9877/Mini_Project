@@ -37,3 +37,71 @@ Right now, CircuitCanvasView draws everything on a single Canvas using GraphicsC
 Once you switch to fxsvgimage, each gate becomes a real JavaFX Node living permanently in the scene graph — this is retained-mode rendering: nodes persist, and you move/scale them by changing their properties, not by redrawing pixels.
 
 This actually makes zoom/pan easier, not harder.
+
+This would be diagram for Node Graph
+Pane (root)
+ ├── Canvas (grid only — redrawn on pan/zoom, screen-space)
+ └── Group "worldGroup" (scaled/translated as one unit)
+      ├── Gate nodes (from fxsvgimage)
+      ├── Switch/LED nodes
+      └── Wire shapes
+
+**Data Structures to be used**
+Data Structure - Which we are going to use for this evaluation
+1. ArrayList -> Circuit.elements, Circuit.wires - Ordered storage of all gates/switches/LEDs and all wires currently on the canvas
+2. HashMap	-> Circuit.elementIndex (ID -> CircuitElement), Circuit.portIndex (ID -> Port) - O(1) lookup of any component/port by its unique ID, instead of scanning the list
+(ID->CircuitElement) this is going to be the mapping and also same for ID and Port
+3. HashMap -> ComponentFactory.componentRegistry (String -> ComponentType)	- Maps a type name to its enum constant for creation
+4. HashMap ->	IdGenerator.counters (prefix -> running count) - Tracks the next free number per ID prefix (GATE-1, PORT-7, etc.)
+5. Enum -> ComponentType, PortType, SignalState -	Fixed, closed sets of values — gate kinds, port direction, signal level
+6. (IMPORTANT) JavaFX Scene Graph (Tree) -> *worldGroup (new, from the fxsvgimage pivot)*	Each parsed SVG gate becomes a node subtree; nesting them under one Group lets zoom/pan transform everything as a unit
+7. List (bendPoints) -> Wire.bendPoints - Ordered path points for wire routing (currently empty/straight-line; will hold the 1-bend point later)
+(This 7th point to be implemented later as it has orthogonal routing)
+
+Data Structure - Which we have planned of implementing for further evaluations
+1. HashSet -> SelectionManager.selectedIds - Fast add/remove/contains for multi-select, no duplicates
+2. 2 Stacks -> CommandManager — undo stack + redo stack - Command-pattern undo/redo
+3. Directed Graph (adjacency list via HashMap<Node, List<Edge>>) - Circuit Model implementation, that is, this would be the structure for storing the Circuit instead of having a GraphBuilder class
+3. Queue -> Topological sort (Kahn's algorithm) for evaluation order - Determines the order gates must be evaluated in
+4. Stack (or recursion) -> Cycle detection (DFS with visiting/visited marking) - Flags illegal feedback loops in a combinational only circuit
+
+**Class Connectivity**
+EditorWindow  (Application entry point)
+ │
+ ├─ creates → Circuit                         (the model — holds elements + wires)
+ │
+ ├─ creates → CircuitCanvasView                (extends Pane; renders via worldGroup + grid Canvas)
+ │              └─ uses → ComponentFactory       (creates Gate/Switch/LedProbe instances)
+ │              └─ uses → GridManager           (drawn as separate background Canvas layer)
+ │              └─ (each gate/switch/LED node)  → parsed from SVG via fxsvgimage
+ │
+ ├─ creates → EditorController                 (orchestrator)
+ │              ├─ holds → Circuit
+ │              ├─ holds → CircuitCanvasView
+ │              ├─ holds → ViewportManager     (drives worldGroup's scale/translate transform)
+ │              └─ holds → GridManager         (redrawn on every pan/zoom change)
+ │
+ ├─ creates → EditorToolbar                    (buttons → call EditorController methods)
+ │              └─ calls → EditorController.{toggleGrid, zoomIn, zoomOut,
+ │                          activateSelectTool*, activateWireTool*, activatePanTool*,
+ │                          undo*, redo*, stopSimulation*}   (* = currently stubbed)
+ │
+ └─ creates → CircuitElementPalette            (buttons per ComponentType)
+                └─ calls → EditorController.selectComponentType(type)
+                              └─ forwards to → CircuitCanvasView.setPendingType(type)
+
+
+Circuit  (model, framework-independent)
+ ├─ List<CircuitElement> elements
+ ├─ List<Wire> wires
+ ├─ HashMap elementIndex, portIndex
+ └─ CircuitElement (abstract)
+      ├─ Gate (AND/OR/NOT/NAND/NOR/XOR/XNOR — port count set by type)
+      ├─ Switch (1 output port, toggleable)
+      └─ LedProbe (1 input port, displays state)
+           each holds → List<Port>
+                          Port → SignalState, PortType, owner reference, connectedWire reference
+
+Wire
+ ├─ Port source, Port target
+ └─ List<Point2D> bendPoints
